@@ -197,6 +197,12 @@
 
       function validateDestination(value) {
         const destination = new URL(value);
+        if (destination.protocol === "mailto:") {
+          if (!destination.pathname.includes("@") || destination.search || destination.hash) {
+            throw new Error("Некорректный email-контакт.");
+          }
+          return destination;
+        }
         if (destination.protocol !== "https:" || !ALLOWED_HTTPS_HOSTS.has(destination.hostname.toLowerCase())) {
           throw new Error("Этот тип контакта пока не поддерживается.");
         }
