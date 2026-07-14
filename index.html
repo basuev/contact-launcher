@@ -126,7 +126,13 @@
     (() => {
       "use strict";
 
-      const EXPECTED_MESSAGE_SHA256 = "8f9e6f2afa7a3d0b0bf7fefcdfb3541402e375dd8ce125e3ca3005603707b665";
+      const PUBLIC_KEY_JWK = globalThis.CONTACT_LAUNCHER_PUBLIC_JWK || {
+        kty: "EC",
+        crv: "P-256",
+        x: "zi_SYd5xjwp7kDYP8jva3D-fFekUA9TR3CpNm4Qj8E8",
+        y: "A8c0xBHa5YOD8BqMI0Kg548U8xrofILRsRwPEGhHS1U",
+        ext: true
+      };
       const ALLOWED_HTTPS_HOSTS = new Set([
         "telegram.me", "www.telegram.me", "t.me", "www.t.me",
         "instagram.com", "www.instagram.com",
@@ -151,25 +157,42 @@
         elements.status.textContent = "Вернитесь в список контактов и попробуйте снова.";
       }
 
-      function decodePayload(encoded) {
-        if (!encoded || encoded.length > 30000) throw new Error("Некорректная ссылка.");
+      function decodeBase64Url(encoded) {
         const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
         const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
-        const bytes = Uint8Array.from(atob(padded), character => character.charCodeAt(0));
-        const payload = JSON.parse(new TextDecoder().decode(bytes));
+        return Uint8Array.from(atob(padded), character => character.charCodeAt(0));
+      }
+
+      function decodeSignedPayload(fragment) {
+        if (!fragment || fragment.length > 30000) throw new Error("Некорректная ссылка.");
+        const parts = fragment.split(".");
+        if (parts.length !== 2 || !parts[0] || !parts[1]) {
+          throw new Error("В ссылке нет подписи.");
+        }
+        const payload = JSON.parse(new TextDecoder().decode(decodeBase64Url(parts[0])));
         if (typeof payload.destination !== "string" || typeof payload.message !== "string") {
           throw new Error("В ссылке нет контакта или текста.");
         }
         if (!payload.message || payload.message.length > 20000) {
           throw new Error("Текст сообщения имеет неверную длину.");
         }
-        return payload;
+        return {payload, encodedPayload: parts[0], signature: decodeBase64Url(parts[1])};
       }
 
-      async function sha256Hex(value) {
-        const bytes = new TextEncoder().encode(value);
-        const digest = await crypto.subtle.digest("SHA-256", bytes);
-        return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      async function verifySignature(encodedPayload, signature) {
+        const key = await crypto.subtle.importKey(
+          "jwk",
+          PUBLIC_KEY_JWK,
+          {name: "ECDSA", namedCurve: "P-256"},
+          false,
+          ["verify"]
+        );
+        return crypto.subtle.verify(
+          {name: "ECDSA", hash: "SHA-256"},
+          key,
+          signature,
+          new TextEncoder().encode(encodedPayload)
+        );
       }
 
       function validateDestination(value) {
@@ -231,13 +254,13 @@
         let payload;
         let destination;
         try {
-          const encodedPayload = location.hash.slice(1);
+          const signedPayload = decodeSignedPayload(location.hash.slice(1));
           history.replaceState(null, "", location.pathname);
-          payload = decodePayload(encodedPayload);
-          destination = validateDestination(payload.destination);
-          if (await sha256Hex(payload.message) !== EXPECTED_MESSAGE_SHA256) {
-            throw new Error("Текст сообщения не прошёл проверку.");
+          if (!await verifySignature(signedPayload.encodedPayload, signedPayload.signature)) {
+            throw new Error("Подпись сообщения не прошла проверку.");
           }
+          payload = signedPayload.payload;
+          destination = validateDestination(payload.destination);
         } catch (error) {
           fail(error instanceof Error ? error.message : "Некорректная ссылка.");
           return;

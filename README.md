@@ -4,6 +4,6 @@ A static mobile page that copies a prepared message and opens an allowed contact
 
 The URL fragment contains the destination and message. Browsers do not send fragments to GitHub Pages or other servers, and the page removes the fragment from browser history before processing it. The page has no analytics, application network requests, external assets, or writable server state.
 
-The launcher allowlists supported contact hosts and accepts only the expected message hash. Modified payloads fail closed. The payload is encoded rather than encrypted, so anyone with an exact link can decode it.
+The launcher allowlists supported contact hosts and verifies every dynamic payload with an embedded P-256 public key. The private signing key remains in the local collector runtime. Unsigned or modified payloads fail closed. The payload is encoded rather than encrypted, so anyone with an exact link can decode it.
 
 Mobile Safari requires a user gesture before clipboard writes. When both automatic copy methods are blocked, the page shows one button that copies the message and opens the contact.
