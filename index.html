@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex, nofollow, noarchive">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
   <title>Открыть контакт</title>
   <style>
@@ -125,6 +126,7 @@
     (() => {
       "use strict";
 
+      const EXPECTED_MESSAGE_SHA256 = "8f9e6f2afa7a3d0b0bf7fefcdfb3541402e375dd8ce125e3ca3005603707b665";
       const ALLOWED_HTTPS_HOSTS = new Set([
         "telegram.me", "www.telegram.me", "t.me", "www.t.me",
         "instagram.com", "www.instagram.com",
@@ -149,8 +151,7 @@
         elements.status.textContent = "Вернитесь в список контактов и попробуйте снова.";
       }
 
-      function decodePayload() {
-        const encoded = location.hash.slice(1);
+      function decodePayload(encoded) {
         if (!encoded || encoded.length > 30000) throw new Error("Некорректная ссылка.");
         const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/");
         const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
@@ -163,6 +164,12 @@
           throw new Error("Текст сообщения имеет неверную длину.");
         }
         return payload;
+      }
+
+      async function sha256Hex(value) {
+        const bytes = new TextEncoder().encode(value);
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
       }
 
       function validateDestination(value) {
@@ -188,6 +195,22 @@
         return copied;
       }
 
+      async function copyAutomatically(text) {
+        if (navigator.clipboard?.writeText) {
+          try {
+            await navigator.clipboard.writeText(text);
+            return true;
+          } catch (_) {
+            // WebKit normally rejects this path because page load is not a user gesture.
+          }
+        }
+        try {
+          return legacyCopy(text);
+        } catch (_) {
+          return false;
+        }
+      }
+
       async function copyFromGesture(text) {
         if (navigator.clipboard?.writeText) {
           try {
@@ -201,26 +224,28 @@
       }
 
       function openDestination(destination) {
-        location.assign(destination.href);
+        location.replace(destination.href);
       }
 
       async function initialize() {
         let payload;
         let destination;
         try {
-          payload = decodePayload();
+          const encodedPayload = location.hash.slice(1);
+          history.replaceState(null, "", location.pathname);
+          payload = decodePayload(encodedPayload);
           destination = validateDestination(payload.destination);
+          if (await sha256Hex(payload.message) !== EXPECTED_MESSAGE_SHA256) {
+            throw new Error("Текст сообщения не прошёл проверку.");
+          }
         } catch (error) {
           fail(error instanceof Error ? error.message : "Некорректная ссылка.");
           return;
         }
 
         elements.destinationLabel.textContent = destination.hostname;
-        elements.title.textContent = "Скопировать текст и открыть контакт";
-        elements.explanation.textContent = "Нажмите кнопку. Текст скопируется, затем откроется контакт.";
         elements.message.value = payload.message;
         elements.openOnly.href = destination.href;
-        elements.actions.hidden = false;
 
         elements.copyOpen.addEventListener("click", async () => {
           elements.copyOpen.disabled = true;
@@ -238,17 +263,16 @@
           elements.message.select();
         });
 
-        const attemptKey = `contact-launcher:${location.hash.slice(1, 65)}`;
-        if (!sessionStorage.getItem(attemptKey) && navigator.clipboard?.writeText) {
-          sessionStorage.setItem(attemptKey, "1");
-          try {
-            await navigator.clipboard.writeText(payload.message);
-            elements.status.textContent = "Текст скопирован. Открываем контакт...";
-            openDestination(destination);
-          } catch (_) {
-            elements.status.textContent = "Для копирования нужно нажать кнопку.";
-          }
+        if (await copyAutomatically(payload.message)) {
+          elements.status.textContent = "Текст скопирован. Открываем контакт...";
+          openDestination(destination);
+          return;
         }
+
+        elements.title.textContent = "Скопировать текст и открыть контакт";
+        elements.explanation.textContent = "Нажмите кнопку. Текст скопируется, затем откроется контакт.";
+        elements.status.textContent = "Браузер требует подтверждение копирования.";
+        elements.actions.hidden = false;
       }
 
       initialize();
